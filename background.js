@@ -1,46 +1,71 @@
-// Background script for ETA Invoice Exporter
+// Enhanced Background script for ETA Invoice Exporter
 class ETABackground {
     constructor() {
         this.init();
     }
 
     init() {
-        // Handle extension installation
         chrome.runtime.onInstalled.addListener((details) => {
             if (details.reason === 'install') {
                 this.handleInstallation();
             }
         });
 
-        // Handle messages from content scripts and popup
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             this.handleMessage(message, sender, sendResponse);
             return true;
         });
 
-        // Handle tab updates to check if user is on ETA site
         chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             if (changeInfo.status === 'complete' && tab.url) {
                 this.handleTabUpdate(tab);
             }
         });
+
+        // Add performance monitoring
+        this.setupPerformanceMonitoring();
+    }
+
+    setupPerformanceMonitoring() {
+        chrome.runtime.onConnect.addListener((port) => {
+            if (port.name === 'performance') {
+                port.onMessage.addListener((msg) => {
+                    if (msg.type === 'performance-data') {
+                        console.log('Performance metrics:', msg.data);
+                        this.optimizeBasedOnPerformance(msg.data);
+                    }
+                });
+            }
+        });
+    }
+
+    optimizeBasedOnPerformance(data) {
+        if (data.memoryUsage > 100 * 1024 * 1024) { // 100MB
+            chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+                if (tabs[0]) {
+                    chrome.tabs.sendMessage(tabs[0].id, {
+                        action: 'adjustBatchSize',
+                        newSize: 3
+                    }).catch(() => {});
+                }
+            });
+        }
     }
 
     handleInstallation() {
-        // Set up initial storage
         chrome.storage.local.set({
             installDate: new Date().toISOString(),
-            version: '1.0.0',
-            usageCount: 0
+            version: '1.1.0',
+            usageCount: 0,
+            performanceMode: 'auto'
         });
 
-        // Show welcome notification (only if notifications permission is available)
         if (chrome.notifications) {
             chrome.notifications.create({
                 type: 'basic',
                 iconUrl: 'icons/icon48.png',
-                title: 'مُصدِّر الفواتير المجاني',
-                message: 'تم تثبيت الإضافة بنجاح! انتقل إلى بوابة الفاتورة الإلكترونية لبدء الاستخدام.'
+                title: 'مُصدِّر الفواتير المحسن',
+                message: 'تم تثبيت النسخة المحسنة! سرعة أعلى في تحميل البيانات.'
             });
         }
     }
@@ -68,7 +93,11 @@ class ETABackground {
 
                 case 'progressUpdate':
                     // Forward progress updates to popup if needed
-                    // This allows content script to communicate progress to popup
+                    break;
+
+                case 'optimizePerformance':
+                    await this.setPerformanceMode(message.mode);
+                    sendResponse({ success: true });
                     break;
 
                 default:
@@ -80,12 +109,23 @@ class ETABackground {
         }
     }
 
+    async setPerformanceMode(mode) {
+        await chrome.storage.local.set({ performanceMode: mode });
+        
+        const tabs = await chrome.tabs.query({url: "https://invoicing.eta.gov.eg/*"});
+        tabs.forEach(tab => {
+            chrome.tabs.sendMessage(tab.id, {
+                action: 'setPerformanceMode',
+                mode: mode
+            }).catch(() => {});
+        });
+    }
+
     handleTabUpdate(tab) {
         if (tab.url && tab.url.includes('invoicing.eta.gov.eg')) {
-            // Update badge to show extension is active
             chrome.action.setBadgeText({
                 tabId: tab.id,
-                text: '✓'
+                text: '⚡'
             });
             
             chrome.action.setBadgeBackgroundColor({
@@ -93,13 +133,11 @@ class ETABackground {
                 color: '#10b981'
             });
 
-            // Update title
             chrome.action.setTitle({
                 tabId: tab.id,
-                title: 'مُصدِّر الفواتير المجاني - جاهز للاستخدام'
+                title: 'مُصدِّر الفواتير المحسن - جاهز للتحميل السريع'
             });
         } else {
-            // Clear badge for non-ETA sites
             chrome.action.setBadgeText({
                 tabId: tab.id,
                 text: ''
@@ -107,7 +145,7 @@ class ETABackground {
 
             chrome.action.setTitle({
                 tabId: tab.id,
-                title: 'مُصدِّر الفواتير المجاني'
+                title: 'مُصدِّر الفواتير المحسن'
             });
         }
     }
@@ -121,41 +159,39 @@ class ETABackground {
             lastUsed: new Date().toISOString()
         });
 
-        // Show milestone notifications
         if (newCount === 1) {
             chrome.notifications.create({
                 type: 'basic',
                 iconUrl: 'icons/icon48.png',
-                title: 'أول تصدير ناجح!',
-                message: 'تهانينا! تم تصدير أول ملف بنجاح.'
+                title: 'أول تصدير سريع!',
+                message: 'تم تصدير البيانات بسرعة محسنة!'
             });
         } else if (newCount === 10) {
             chrome.notifications.create({
                 type: 'basic',
                 iconUrl: 'icons/icon48.png',
                 title: 'مستخدم نشط!',
-                message: 'رائع! لقد قمت بتصدير 10 ملفات بنجاح.'
+                message: 'رائع! لقد قمت بتصدير 10 ملفات بسرعة عالية.'
             });
         }
     }
 
     async getUsageStats() {
-        const result = await chrome.storage.local.get(['usageCount', 'installDate', 'lastUsed']);
+        const result = await chrome.storage.local.get(['usageCount', 'installDate', 'lastUsed', 'performanceMode']);
         return {
             usageCount: result.usageCount || 0,
             installDate: result.installDate,
-            lastUsed: result.lastUsed
+            lastUsed: result.lastUsed,
+            performanceMode: result.performanceMode || 'auto'
         };
     }
 
-    // Utility method to store data
     async storeData(key, value) {
         return new Promise((resolve) => {
             chrome.storage.local.set({ [key]: value }, resolve);
         });
     }
 
-    // Utility method to get data
     async getData(key) {
         return new Promise((resolve) => {
             chrome.storage.local.get([key], (result) => {

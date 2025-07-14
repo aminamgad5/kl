@@ -1,4 +1,4 @@
-// Enhanced Content script for ETA Invoice Exporter - Complete Fix for All Pages Loading
+// Enhanced Content script for ETA Invoice Exporter - Fast Multi-Page Loading
 class ETAContentScript {
   constructor() {
     this.invoiceData = [];
@@ -10,19 +10,77 @@ class ETAContentScript {
     this.isProcessingAllPages = false;
     this.progressCallback = null;
     this.domObserver = null;
-    this.pageLoadTimeout = 20000; // 20 seconds timeout
+    this.pageLoadTimeout = 10000; // Reduced from 20 seconds
+    this.apiEndpoint = null;
+    this.authHeaders = null;
     this.init();
   }
   
   init() {
     console.log('ETA Exporter: Content script initialized');
+    this.detectAPIEndpoint();
+    
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => this.scanForInvoices());
     } else {
-      setTimeout(() => this.scanForInvoices(), 1000);
+      setTimeout(() => this.scanForInvoices(), 500); // Reduced delay
     }
     
     this.setupMutationObserver();
+  }
+  
+  // NEW: API Detection for Direct Calls
+  detectAPIEndpoint() {
+    const originalFetch = window.fetch;
+    const self = this;
+    
+    window.fetch = async function(...args) {
+      const response = await originalFetch.apply(this, args);
+      self.analyzeRequest(args[0], args[1]);
+      return response;
+    };
+    
+    // Also intercept XMLHttpRequest
+    const originalXHR = window.XMLHttpRequest.prototype.open;
+    window.XMLHttpRequest.prototype.open = function(method, url, ...args) {
+      if (url && url.includes('/api/') && url.includes('documents')) {
+        self.apiEndpoint = url;
+        self.extractAuthHeaders();
+      }
+      return originalXHR.call(this, method, url, ...args);
+    };
+  }
+  
+  analyzeRequest(url, options) {
+    if (typeof url === 'string' && url.includes('/api/') && url.includes('documents')) {
+      this.apiEndpoint = url;
+      this.extractAuthHeaders();
+    }
+  }
+  
+  extractAuthHeaders() {
+    const token = localStorage.getItem('authToken') || 
+                 sessionStorage.getItem('authToken') ||
+                 this.extractTokenFromCookies();
+    
+    if (token) {
+      this.authHeaders = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      };
+    }
+  }
+  
+  extractTokenFromCookies() {
+    const cookies = document.cookie.split(';');
+    for (let cookie of cookies) {
+      const [name, value] = cookie.trim().split('=');
+      if (name.includes('token') || name.includes('auth') || name.includes('session')) {
+        return value;
+      }
+    }
+    return null;
   }
   
   setupMutationObserver() {
@@ -45,7 +103,7 @@ class ETAContentScript {
       
       if (shouldRescan && !this.isProcessingAllPages) {
         clearTimeout(this.rescanTimeout);
-        this.rescanTimeout = setTimeout(() => this.scanForInvoices(), 800);
+        this.rescanTimeout = setTimeout(() => this.scanForInvoices(), 500); // Reduced delay
       }
     });
     
@@ -60,17 +118,12 @@ class ETAContentScript {
       console.log('ETA Exporter: Starting invoice scan...');
       this.invoiceData = [];
       
-      // Extract pagination info first
       this.extractPaginationInfo();
-      
-      // Find invoice rows
       const rows = this.getVisibleInvoiceRows();
       console.log(`ETA Exporter: Found ${rows.length} visible invoice rows on page ${this.currentPage}`);
       
       if (rows.length === 0) {
-        console.warn('ETA Exporter: No invoice rows found. Trying alternative selectors...');
         const alternativeRows = this.getAlternativeInvoiceRows();
-        console.log(`ETA Exporter: Found ${alternativeRows.length} rows with alternative selectors`);
         alternativeRows.forEach((row, index) => {
           const invoiceData = this.extractDataFromRow(row, index + 1);
           if (this.isValidInvoiceData(invoiceData)) {
@@ -94,7 +147,6 @@ class ETAContentScript {
   }
   
   getVisibleInvoiceRows() {
-    // Primary selectors for invoice rows
     const selectors = [
       '.ms-DetailsRow[role="row"]',
       '.ms-List-cell[role="gridcell"]',
@@ -110,7 +162,6 @@ class ETAContentScript {
       );
       
       if (visibleRows.length > 0) {
-        console.log(`ETA Exporter: Found ${visibleRows.length} rows using selector: ${selector}`);
         return visibleRows;
       }
     }
@@ -119,7 +170,6 @@ class ETAContentScript {
   }
   
   getAlternativeInvoiceRows() {
-    // Alternative selectors when primary ones fail
     const alternativeSelectors = [
       'tr[role="row"]',
       '.ms-List-cell',
@@ -161,7 +211,6 @@ class ETAContentScript {
   hasInvoiceData(row) {
     if (!row) return false;
     
-    // Check for electronic number or internal number
     const electronicNumber = row.querySelector('.internalId-link a, [data-automation-key="uuid"] a, .griCellTitle');
     const internalNumber = row.querySelector('.griCellSubTitle, [data-automation-key="uuid"] .griCellSubTitle');
     const totalAmount = row.querySelector('[data-automation-key="total"], .griCellTitleGray');
@@ -173,19 +222,11 @@ class ETAContentScript {
   
   extractPaginationInfo() {
     try {
-      // Extract total count from "Results: 304" text
       this.totalCount = this.extractTotalCount();
-      
-      // Extract current page from pagination buttons
       this.currentPage = this.extractCurrentPage();
-      
-      // Detect results per page
       this.resultsPerPage = this.detectResultsPerPage();
-      
-      // Calculate total pages
       this.totalPages = Math.ceil(this.totalCount / this.resultsPerPage);
       
-      // Ensure we have valid values
       this.currentPage = Math.max(this.currentPage, 1);
       this.totalPages = Math.max(this.totalPages, this.currentPage);
       this.totalCount = Math.max(this.totalCount, this.invoiceData.length);
@@ -194,7 +235,6 @@ class ETAContentScript {
       
     } catch (error) {
       console.warn('ETA Exporter: Error extracting pagination info:', error);
-      // Set defaults
       this.currentPage = 1;
       this.totalPages = this.findMaxPageNumber() || 1;
       this.totalCount = this.invoiceData.length;
@@ -202,23 +242,19 @@ class ETAContentScript {
   }
   
   extractTotalCount() {
-    // Look for "Results: 304" pattern at the bottom of the page
     const resultElements = document.querySelectorAll('*');
     
     for (const element of resultElements) {
       const text = element.textContent || '';
       
-      // Look for "Results: XXX" pattern (exact match from screenshot)
       const resultsMatch = text.match(/Results:\s*(\d+)/i);
       if (resultsMatch) {
         const count = parseInt(resultsMatch[1]);
         if (count > 0) {
-          console.log(`ETA Exporter: Found total count ${count} from "Results:" text`);
           return count;
         }
       }
       
-      // Look for other patterns
       const patterns = [
         /(\d+)\s*results/i,
         /total:\s*(\d+)/i,
@@ -233,23 +269,8 @@ class ETAContentScript {
         if (match) {
           const count = parseInt(match[1]);
           if (count > 0) {
-            console.log(`ETA Exporter: Found total count ${count} using pattern`);
             return count;
           }
-        }
-      }
-    }
-    
-    // Fallback: look in pagination area
-    const paginationArea = document.querySelector('.ms-CommandBar, [class*="pagination"], [class*="pager"]');
-    if (paginationArea) {
-      const text = paginationArea.textContent || '';
-      const match = text.match(/(\d+)\s*-\s*(\d+)\s*of\s*(\d+)|(\d+)\s*-\s*(\d+)\s*من\s*(\d+)/i);
-      if (match) {
-        const total = parseInt(match[3] || match[6]);
-        if (total > 0) {
-          console.log(`ETA Exporter: Found total count ${total} from pagination area`);
-          return total;
         }
       }
     }
@@ -260,15 +281,12 @@ class ETAContentScript {
   detectResultsPerPage() {
     const currentPageRows = this.invoiceData.length;
     
-    // If we're not on the last page, use current row count
     if (this.currentPage < this.totalPages && currentPageRows > 0) {
       return currentPageRows;
     }
     
-    // Common page sizes to check
     const commonPageSizes = [10, 20, 25, 50, 100];
     
-    // If we have rows, find the closest page size
     if (currentPageRows > 0) {
       for (const size of commonPageSizes) {
         if (currentPageRows <= size) {
@@ -278,12 +296,10 @@ class ETAContentScript {
       return currentPageRows;
     }
     
-    // Default assumption based on ETA portal
     return 50;
   }
   
   extractCurrentPage() {
-    // Look for active/selected page button
     const activePageSelectors = [
       '.ms-Button--primary[aria-pressed="true"]',
       '[aria-current="page"]',
@@ -305,14 +321,12 @@ class ETAContentScript {
       }
     }
     
-    // Look for numbered pagination buttons and find the active one
     const pageButtons = document.querySelectorAll('button, a');
     for (const button of pageButtons) {
       const text = button.textContent?.trim();
       const pageNum = parseInt(text);
       
       if (!isNaN(pageNum) && pageNum > 0) {
-        // Check if this button looks active
         const classes = button.className || '';
         const ariaPressed = button.getAttribute('aria-pressed');
         const ariaCurrent = button.getAttribute('aria-current');
@@ -349,7 +363,6 @@ class ETAContentScript {
       index: index,
       pageNumber: this.currentPage,
       
-      // Main invoice data matching Excel format
       serialNumber: index,
       viewButton: 'عرض',
       documentType: 'فاتورة',
@@ -377,7 +390,6 @@ class ETAContentScript {
       foodDrugGuide: '',
       externalLink: '',
       
-      // Additional fields
       issueTime: '',
       totalAmount: '',
       currency: 'EGP',
@@ -386,12 +398,10 @@ class ETAContentScript {
     };
     
     try {
-      // Try to extract data using different methods
       this.extractUsingDataAttributes(row, invoice);
       this.extractUsingCellPositions(row, invoice);
       this.extractUsingTextContent(row, invoice);
       
-      // Generate external link if we have electronic number
       if (invoice.electronicNumber) {
         invoice.externalLink = this.generateExternalLink(invoice);
       }
@@ -404,7 +414,6 @@ class ETAContentScript {
   }
   
   extractUsingDataAttributes(row, invoice) {
-    // Method 1: Using data-automation-key attributes
     const cells = row.querySelectorAll('.ms-DetailsRow-cell, [data-automation-key]');
     
     cells.forEach(cell => {
@@ -455,7 +464,6 @@ class ETAContentScript {
             invoice.totalAmount = totalText;
             invoice.totalInvoice = totalText;
             
-            // Calculate VAT and invoice value
             const totalValue = this.parseAmount(totalText);
             if (totalValue > 0) {
               const vatRate = 0.14;
@@ -528,11 +536,9 @@ class ETAContentScript {
   }
   
   extractUsingCellPositions(row, invoice) {
-    // Method 2: Using cell positions (fallback)
     const cells = row.querySelectorAll('.ms-DetailsRow-cell, td, [role="gridcell"]');
     
     if (cells.length >= 8) {
-      // Try to extract based on typical column positions
       if (!invoice.electronicNumber) {
         const firstCell = cells[0];
         const link = firstCell.querySelector('a');
@@ -542,7 +548,6 @@ class ETAContentScript {
       }
       
       if (!invoice.totalAmount) {
-        // Total amount is usually in one of the middle columns
         for (let i = 2; i < Math.min(6, cells.length); i++) {
           const cellText = cells[i].textContent?.trim() || '';
           if (cellText.includes('EGP') || /^\d+[\d,]*\.?\d*$/.test(cellText.replace(/[,٬]/g, ''))) {
@@ -554,7 +559,6 @@ class ETAContentScript {
       }
       
       if (!invoice.issueDate) {
-        // Date is usually in one of the early columns
         for (let i = 1; i < Math.min(4, cells.length); i++) {
           const cellText = cells[i].textContent?.trim() || '';
           if (cellText.includes('/') && cellText.length >= 8) {
@@ -568,10 +572,8 @@ class ETAContentScript {
   }
   
   extractUsingTextContent(row, invoice) {
-    // Method 3: Extract from all text content (last resort)
     const allText = row.textContent || '';
     
-    // Extract electronic number pattern
     if (!invoice.electronicNumber) {
       const electronicMatch = allText.match(/[A-Z0-9]{20,30}/);
       if (electronicMatch) {
@@ -579,7 +581,6 @@ class ETAContentScript {
       }
     }
     
-    // Extract date pattern
     if (!invoice.issueDate) {
       const dateMatch = allText.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
       if (dateMatch) {
@@ -588,7 +589,6 @@ class ETAContentScript {
       }
     }
     
-    // Extract amount pattern
     if (!invoice.totalAmount) {
       const amountMatch = allText.match(/\d+[,٬]?\d*\.?\d*\s*EGP/);
       if (amountMatch) {
@@ -629,278 +629,288 @@ class ETAContentScript {
     return !!(invoice.electronicNumber || invoice.internalNumber || invoice.totalAmount);
   }
   
+  // OPTIMIZED: Fast All Pages Data Loading
   async getAllPagesData(options = {}) {
     try {
       this.isProcessingAllPages = true;
       this.allPagesData = [];
       
-      console.log(`ETA Exporter: Starting to load ALL pages. Total invoices to load: ${this.totalCount}`);
+      console.log(`ETA Exporter: Fast loading ALL pages. Total: ${this.totalCount} invoices`);
       
-      // Always start from page 1 to ensure we get everything
-      await this.navigateToFirstPage();
-      
-      let processedInvoices = 0;
-      let currentPageNum = 1;
-      let maxAttempts = 1000; // Safety limit
-      let attempts = 0;
-      
-      // Continue until we've processed all invoices or reached limits
-      while (processedInvoices < this.totalCount && attempts < maxAttempts) {
-        attempts++;
-        
-        try {
-          console.log(`ETA Exporter: Processing page ${currentPageNum}, attempt ${attempts}...`);
-          
-          // Update progress
-          if (this.progressCallback) {
-            this.progressCallback({
-              currentPage: currentPageNum,
-              totalPages: this.totalPages,
-              message: `جاري معالجة الصفحة ${currentPageNum}... (${processedInvoices}/${this.totalCount} فاتورة)`,
-              percentage: this.totalCount > 0 ? (processedInvoices / this.totalCount) * 100 : 0
-            });
-          }
-          
-          // Wait for page to load completely
-          await this.waitForPageLoadComplete();
-          
-          // Scan invoices on current page
-          this.scanForInvoices();
-          
-          if (this.invoiceData.length > 0) {
-            // Add page data to collection with correct serial numbers
-            const pageData = this.invoiceData.map((invoice, index) => ({
-              ...invoice,
-              pageNumber: currentPageNum,
-              serialNumber: processedInvoices + index + 1,
-              globalIndex: processedInvoices + index + 1
-            }));
-            
-            this.allPagesData.push(...pageData);
-            processedInvoices += this.invoiceData.length;
-            
-            console.log(`ETA Exporter: Page ${currentPageNum} processed, collected ${this.invoiceData.length} invoices. Total: ${processedInvoices}/${this.totalCount}`);
-          } else {
-            console.warn(`ETA Exporter: No invoices found on page ${currentPageNum}`);
-          }
-          
-          // Check if we've got all invoices
-          if (processedInvoices >= this.totalCount) {
-            console.log(`ETA Exporter: Successfully loaded all ${processedInvoices} invoices!`);
-            break;
-          }
-          
-          // Try to navigate to next page
-          const navigatedToNext = await this.navigateToNextPageRobust();
-          if (!navigatedToNext) {
-            console.log('ETA Exporter: Cannot navigate to next page, stopping');
-            break;
-          }
-          
-          currentPageNum++;
-          await this.delay(2000); // Wait between pages
-          
-        } catch (error) {
-          console.error(`Error processing page ${currentPageNum}:`, error);
-          
-          // Try to continue to next page
-          const navigatedToNext = await this.navigateToNextPageRobust();
-          if (!navigatedToNext) {
-            break;
-          }
-          currentPageNum++;
+      // Method 1: Try API calls first (fastest)
+      if (this.apiEndpoint && this.authHeaders) {
+        const apiResult = await this.getAllPagesViaAPI(options);
+        if (apiResult.success && apiResult.data.length > 0) {
+          return apiResult;
         }
       }
       
-      console.log(`ETA Exporter: Completed! Loaded ${this.allPagesData.length} invoices out of ${this.totalCount} total.`);
-      
-      return {
-        success: true,
-        data: this.allPagesData,
-        totalProcessed: this.allPagesData.length,
-        expectedTotal: this.totalCount
-      };
+      // Method 2: Parallel DOM loading (fast)
+      return await this.getAllPagesViaParallelDOM(options);
       
     } catch (error) {
-      console.error('ETA Exporter: Error getting all pages data:', error);
+      console.error('ETA Exporter: Error in fast loading:', error);
       return { 
         success: false, 
         data: this.allPagesData,
-        error: error.message,
-        totalProcessed: this.allPagesData.length
+        error: error.message 
       };
     } finally {
       this.isProcessingAllPages = false;
     }
   }
   
-  async navigateToFirstPage() {
-    console.log('ETA Exporter: Navigating to first page...');
+  // NEW: API-based loading (fastest method)
+  async getAllPagesViaAPI(options) {
+    const batchSize = 10;
+    const pagePromises = [];
     
-    // Look for page 1 button
+    for (let page = 1; page <= this.totalPages; page += batchSize) {
+      const batch = [];
+      
+      for (let i = 0; i < batchSize && (page + i) <= this.totalPages; i++) {
+        const currentPage = page + i;
+        batch.push(this.fetchPageDataViaAPI(currentPage));
+      }
+      
+      pagePromises.push(Promise.all(batch));
+    }
+    
+    const results = await Promise.all(pagePromises);
+    const allData = results.flat().flat();
+    
+    return {
+      success: true,
+      data: allData,
+      totalProcessed: allData.length,
+      expectedTotal: this.totalCount
+    };
+  }
+  
+  async fetchPageDataViaAPI(pageNumber) {
+    try {
+      const url = this.buildAPIUrl(pageNumber);
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.authHeaders,
+        credentials: 'include'
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      return this.parseAPIResponse(data, pageNumber);
+      
+    } catch (error) {
+      console.warn(`Failed to fetch page ${pageNumber} via API:`, error);
+      return [];
+    }
+  }
+  
+  buildAPIUrl(pageNumber) {
+    const baseUrl = this.apiEndpoint.split('?')[0];
+    const params = new URLSearchParams({
+      page: pageNumber,
+      pageSize: this.resultsPerPage,
+      sortBy: 'dateTimeReceived',
+      sortOrder: 'desc'
+    });
+    
+    return `${baseUrl}?${params.toString()}`;
+  }
+  
+  parseAPIResponse(data, pageNumber) {
+    const invoices = data.items || data.documents || data.data || [];
+    
+    return invoices.map((item, index) => ({
+      serialNumber: ((pageNumber - 1) * this.resultsPerPage) + index + 1,
+      pageNumber: pageNumber,
+      electronicNumber: item.uuid || item.id || '',
+      internalNumber: item.internalId || '',
+      documentType: item.documentType || 'فاتورة',
+      documentVersion: item.documentTypeVersion || '1.0',
+      status: this.parseStatus(item.status),
+      issueDate: this.formatDate(item.dateTimeIssued),
+      submissionDate: this.formatDate(item.dateTimeReceived),
+      totalAmount: this.formatAmount(item.totalAmount),
+      invoiceValue: this.formatAmount(item.totalSalesAmount),
+      vatAmount: this.formatAmount(item.totalTaxableFees),
+      sellerName: item.issuer?.name || '',
+      sellerTaxNumber: item.issuer?.id || '',
+      buyerName: item.receiver?.name || '',
+      buyerTaxNumber: item.receiver?.id || '',
+      invoiceCurrency: 'EGP',
+      taxDiscount: '0',
+      electronicSignature: 'موقع إلكترونياً',
+      externalLink: this.generateExternalLink(item)
+    }));
+  }
+  
+  parseStatus(status) {
+    const statusMap = {
+      'Valid': 'صالح',
+      'Invalid': 'غير صالح',
+      'Cancelled': 'ملغي',
+      'Submitted': 'مقدم',
+      'Rejected': 'مرفوض'
+    };
+    return statusMap[status] || status || '';
+  }
+  
+  formatDate(dateString) {
+    if (!dateString) return '';
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('ar-EG');
+    } catch {
+      return dateString;
+    }
+  }
+  
+  // NEW: Parallel DOM loading (fallback method)
+  async getAllPagesViaParallelDOM(options) {
+    const batchSize = 5; // Load 5 pages simultaneously
+    const results = [];
+    
+    // Always start from page 1
+    await this.navigateToFirstPage();
+    
+    for (let startPage = 1; startPage <= this.totalPages; startPage += batchSize) {
+      const endPage = Math.min(startPage + batchSize - 1, this.totalPages);
+      const batchPromises = [];
+      
+      for (let page = startPage; page <= endPage; page++) {
+        if (page === this.currentPage) {
+          // Current page - extract directly
+          batchPromises.push(Promise.resolve(this.getCurrentPageData(page)));
+        } else {
+          // Other pages - load in parallel
+          batchPromises.push(this.loadPageInBackground(page));
+        }
+      }
+      
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults.flat());
+      
+      // Update progress
+      if (this.progressCallback) {
+        this.progressCallback({
+          currentPage: endPage,
+          totalPages: this.totalPages,
+          message: `تم تحميل ${endPage} من ${this.totalPages} صفحة`,
+          percentage: (endPage / this.totalPages) * 100
+        });
+      }
+      
+      // Small delay between batches
+      if (endPage < this.totalPages) {
+        await this.delay(200);
+      }
+    }
+    
+    return {
+      success: true,
+      data: results,
+      totalProcessed: results.length,
+      expectedTotal: this.totalCount
+    };
+  }
+  
+  getCurrentPageData(pageNumber) {
+    this.scanForInvoices();
+    return this.invoiceData.map((invoice, index) => ({
+      ...invoice,
+      pageNumber: pageNumber,
+      serialNumber: ((pageNumber - 1) * this.resultsPerPage) + index + 1
+    }));
+  }
+  
+  async loadPageInBackground(pageNumber) {
+    return new Promise((resolve) => {
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.style.width = '1px';
+      iframe.style.height = '1px';
+      
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.set('page', pageNumber);
+      iframe.src = currentUrl.toString();
+      
+      const timeout = setTimeout(() => {
+        if (iframe.parentNode) {
+          document.body.removeChild(iframe);
+        }
+        resolve([]);
+      }, 8000); // 8 second timeout
+      
+      iframe.onload = () => {
+        try {
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+          const data = this.extractDataFromDocument(iframeDoc, pageNumber);
+          
+          clearTimeout(timeout);
+          if (iframe.parentNode) {
+            document.body.removeChild(iframe);
+          }
+          resolve(data);
+        } catch (error) {
+          console.warn(`Error loading page ${pageNumber}:`, error);
+          clearTimeout(timeout);
+          if (iframe.parentNode) {
+            document.body.removeChild(iframe);
+          }
+          resolve([]);
+        }
+      };
+      
+      iframe.onerror = () => {
+        clearTimeout(timeout);
+        if (iframe.parentNode) {
+          document.body.removeChild(iframe);
+        }
+        resolve([]);
+      };
+      
+      document.body.appendChild(iframe);
+    });
+  }
+  
+  extractDataFromDocument(doc, pageNumber) {
+    const rows = doc.querySelectorAll('.ms-DetailsRow[role="row"], .ms-List-cell[role="gridcell"]');
+    const invoices = [];
+    
+    rows.forEach((row, index) => {
+      const invoice = this.extractDataFromRow(row, index + 1);
+      if (this.isValidInvoiceData(invoice)) {
+        invoice.pageNumber = pageNumber;
+        invoice.serialNumber = ((pageNumber - 1) * this.resultsPerPage) + index + 1;
+        invoices.push(invoice);
+      }
+    });
+    
+    return invoices;
+  }
+  
+  async navigateToFirstPage() {
+    if (this.currentPage === 1) return;
+    
     const pageButtons = document.querySelectorAll('button, a');
     for (const button of pageButtons) {
       const buttonText = button.textContent?.trim();
       if (buttonText === '1') {
-        console.log('ETA Exporter: Clicking page 1 button');
         button.click();
-        await this.delay(3000);
+        await this.delay(1000);
         await this.waitForPageLoadComplete();
         this.extractPaginationInfo();
         return;
       }
     }
-    
-    // If no page 1 button, we might already be on page 1
-    this.extractPaginationInfo();
-    if (this.currentPage === 1) {
-      console.log('ETA Exporter: Already on page 1');
-      return;
-    }
-    
-    // Try to navigate using previous buttons until we reach page 1
-    while (this.currentPage > 1) {
-      const navigated = await this.navigateToPreviousPage();
-      if (!navigated) break;
-      await this.delay(2000);
-      await this.waitForPageLoadComplete();
-      this.extractPaginationInfo();
-    }
-  }
-  
-  async navigateToNextPageRobust() {
-    console.log('ETA Exporter: Attempting to navigate to next page...');
-    
-    // Method 1: Try to find and click next button
-    const nextButton = this.findNextButton();
-    if (nextButton && !nextButton.disabled) {
-      console.log('ETA Exporter: Found next button, clicking...');
-      nextButton.click();
-      await this.delay(3000);
-      return true;
-    }
-    
-    // Method 2: Try to find the next page number button
-    const currentPageNum = this.currentPage;
-    const nextPageNum = currentPageNum + 1;
-    
-    const pageButtons = document.querySelectorAll('button, a');
-    for (const button of pageButtons) {
-      const buttonText = button.textContent?.trim();
-      if (parseInt(buttonText) === nextPageNum) {
-        console.log(`ETA Exporter: Found page ${nextPageNum} button, clicking...`);
-        button.click();
-        await this.delay(3000);
-        return true;
-      }
-    }
-    
-    // Method 3: Try to find any button that might be "next"
-    for (const button of pageButtons) {
-      const buttonText = button.textContent?.toLowerCase().trim();
-      const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() || '';
-      
-      if (buttonText.includes('next') || buttonText.includes('التالي') || 
-          buttonText === '>' || buttonText === '»' ||
-          ariaLabel.includes('next') || ariaLabel.includes('التالي')) {
-        
-        if (!button.disabled && !button.getAttribute('disabled')) {
-          console.log('ETA Exporter: Found potential next button, clicking...');
-          button.click();
-          await this.delay(3000);
-          return true;
-        }
-      }
-    }
-    
-    console.log('ETA Exporter: No next page navigation found');
-    return false;
-  }
-  
-  findNextButton() {
-    const nextSelectors = [
-      'button[aria-label*="Next"]',
-      'button[aria-label*="next"]',
-      'button[title*="Next"]',
-      'button[title*="next"]',
-      'button[aria-label*="التالي"]',
-      'button:has([data-icon-name="ChevronRight"])',
-      'button:has([class*="chevron-right"])',
-      '.ms-Button:has([data-icon-name="ChevronRight"])',
-      'button:has(i[class*="right"])',
-      'button:has(span[class*="right"])'
-    ];
-    
-    for (const selector of nextSelectors) {
-      try {
-        const button = document.querySelector(selector);
-        if (button && !button.disabled && !button.getAttribute('disabled')) {
-          const style = window.getComputedStyle(button);
-          if (style.display !== 'none' && style.visibility !== 'hidden') {
-            return button;
-          }
-        }
-      } catch (e) {
-        // Ignore selector errors
-      }
-    }
-    
-    // Fallback: look for buttons with right arrow icons or text
-    const allButtons = document.querySelectorAll('button');
-    for (const button of allButtons) {
-      if (button.disabled || button.getAttribute('disabled')) continue;
-      
-      const hasRightArrow = button.querySelector('[data-icon-name="ChevronRight"], [class*="chevron-right"], [class*="arrow-right"]');
-      if (hasRightArrow) {
-        return button;
-      }
-      
-      // Check button text for next indicators
-      const text = button.textContent?.toLowerCase() || '';
-      if (text.includes('next') || text.includes('التالي') || text === '>' || text === '»') {
-        return button;
-      }
-    }
-    
-    return null;
-  }
-  
-  async navigateToPreviousPage() {
-    const prevSelectors = [
-      'button[aria-label*="Previous"]',
-      'button[aria-label*="previous"]',
-      'button[title*="Previous"]',
-      'button[title*="previous"]',
-      'button[aria-label*="السابق"]',
-      'button:has([data-icon-name="ChevronLeft"])',
-      'button:has([class*="chevron-left"])',
-      '.ms-Button:has([data-icon-name="ChevronLeft"])'
-    ];
-    
-    for (const selector of prevSelectors) {
-      try {
-        const button = document.querySelector(selector);
-        if (button && !button.disabled) {
-          const style = window.getComputedStyle(button);
-          if (style.display !== 'none' && style.visibility !== 'hidden') {
-            console.log('ETA Exporter: Clicking previous button');
-            button.click();
-            await this.delay(2000);
-            return true;
-          }
-        }
-      } catch (e) {
-        // Ignore selector errors
-      }
-    }
-    
-    console.warn('ETA Exporter: No previous button found');
-    return false;
   }
   
   async waitForPageLoadComplete() {
-    console.log('ETA Exporter: Waiting for page load to complete...');
-    
     // Wait for loading indicators to disappear
     await this.waitForCondition(() => {
       const loadingIndicators = document.querySelectorAll(
@@ -911,21 +921,19 @@ class ETAContentScript {
         window.getComputedStyle(el).display !== 'none'
       );
       return !isLoading;
-    }, 20000);
+    }, 10000); // Reduced timeout
     
     // Wait for invoice rows to appear
     await this.waitForCondition(() => {
       const rows = this.getVisibleInvoiceRows();
       return rows.length > 0;
-    }, 20000);
+    }, 10000); // Reduced timeout
     
-    // Wait for DOM stability
-    await this.delay(3000);
-    
-    console.log('ETA Exporter: Page load completed');
+    // Reduced stability wait
+    await this.delay(1000);
   }
   
-  async waitForCondition(condition, timeout = 15000) {
+  async waitForCondition(condition, timeout = 10000) {
     const startTime = Date.now();
     
     while (Date.now() - startTime < timeout) {
@@ -936,10 +944,9 @@ class ETAContentScript {
       } catch (error) {
         // Ignore errors in condition check
       }
-      await this.delay(500);
+      await this.delay(200); // Reduced delay
     }
     
-    console.warn(`ETA Exporter: Condition timeout after ${timeout}ms`);
     return false;
   }
   
@@ -972,7 +979,6 @@ class ETAContentScript {
     const details = [];
     
     try {
-      // Look for details table
       const detailsTable = document.querySelector('.ms-DetailsList, [data-automationid="DetailsList"], table');
       
       if (detailsTable) {
@@ -994,7 +1000,6 @@ class ETAContentScript {
               vatAmount: this.extractCellText(cells[8]) || '0'
             };
             
-            // Skip header rows
             if (item.description && 
                 item.description !== 'اسم الصنف' && 
                 item.description !== 'Description' &&
@@ -1005,7 +1010,6 @@ class ETAContentScript {
         });
       }
       
-      // If no details found, create a summary item
       if (details.length === 0) {
         const invoice = this.invoiceData.find(inv => inv.electronicNumber === invoiceId);
         if (invoice) {

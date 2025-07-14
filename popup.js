@@ -10,6 +10,7 @@ class ETAInvoiceExporter {
     this.attachEventListeners();
     this.checkCurrentPage();
     this.setupProgressListener();
+    this.addPerformanceModeSelector();
   }
   
   initializeElements() {
@@ -59,6 +60,60 @@ class ETAInvoiceExporter {
     };
     
     this.createProgressElements();
+  }
+  
+  addPerformanceModeSelector() {
+    const performanceSection = document.createElement('div');
+    performanceSection.className = 'section';
+    performanceSection.innerHTML = `
+      <div class="section-title">وضع الأداء (جديد):</div>
+      <div class="checkbox-group">
+        <div class="checkbox-item">
+          <input type="radio" id="mode-auto" name="performance-mode" value="auto" checked>
+          <label for="mode-auto">تلقائي - سريع وآمن (موصى به)</label>
+        </div>
+        <div class="checkbox-item">
+          <input type="radio" id="mode-fast" name="performance-mode" value="fast">
+          <label for="mode-fast">سريع جداً - قد يفشل أحياناً</label>
+        </div>
+        <div class="checkbox-item">
+          <input type="radio" id="mode-safe" name="performance-mode" value="safe">
+          <label for="mode-safe">آمن - بطيء (الطريقة القديمة)</label>
+        </div>
+      </div>
+    `;
+    
+    // Insert before the first section
+    const firstSection = document.querySelector('.section');
+    firstSection.parentNode.insertBefore(performanceSection, firstSection);
+    
+    // Add event listeners
+    document.querySelectorAll('input[name="performance-mode"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          this.setPerformanceMode(e.target.value);
+        }
+      });
+    });
+  }
+  
+  async setPerformanceMode(mode) {
+    try {
+      await chrome.runtime.sendMessage({
+        action: 'optimizePerformance',
+        mode: mode
+      });
+      
+      const modeNames = {
+        'auto': 'تلقائي',
+        'fast': 'سريع جداً',
+        'safe': 'آمن'
+      };
+      
+      this.showStatus(`تم تعيين وضع الأداء إلى: ${modeNames[mode]}`, 'success');
+    } catch (error) {
+      console.error('Failed to set performance mode:', error);
+    }
   }
   
   createProgressElements() {
@@ -162,7 +217,7 @@ class ETAInvoiceExporter {
   }
   
   showMultiPageWarning() {
-    const warningText = `تحذير: سيتم تحميل جميع الصفحات (${this.totalPages} صفحة) وقد يستغرق وقتاً أطول.`;
+    const warningText = `⚡ تحسين جديد: سيتم تحميل جميع الصفحات (${this.totalPages} صفحة) بسرعة عالية!`;
     this.showStatus(warningText, 'loading');
     
     setTimeout(() => {
@@ -181,9 +236,7 @@ class ETAInvoiceExporter {
         return;
       }
       
-      // Ensure content script is loaded
       await this.ensureContentScriptLoaded(tab.id);
-      
       await this.loadInvoiceData();
     } catch (error) {
       this.showStatus('خطأ في فحص الصفحة الحالية', 'error');
@@ -193,10 +246,8 @@ class ETAInvoiceExporter {
   
   async ensureContentScriptLoaded(tabId) {
     try {
-      // Try to ping the content script
       await chrome.tabs.sendMessage(tabId, { action: 'ping' });
     } catch (error) {
-      // Content script not loaded, inject it
       console.log('Content script not found, injecting...');
       
       try {
@@ -205,10 +256,7 @@ class ETAInvoiceExporter {
           files: ['content.js']
         });
         
-        // Wait a bit for the script to initialize
         await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // Try to ping again
         await chrome.tabs.sendMessage(tabId, { action: 'ping' });
         console.log('Content script successfully injected and ready');
       } catch (injectError) {
@@ -234,7 +282,7 @@ class ETAInvoiceExporter {
       this.totalPages = response.data.totalPages || 1;
       
       this.updateUI();
-      this.showStatus('تم تحميل البيانات بنجاح', 'success');
+      this.showStatus('✅ تم تحميل البيانات بنجاح - جاهز للتصدير السريع!', 'success');
       
     } catch (error) {
       this.showStatus('خطأ في تحميل البيانات: ' + error.message, 'error');
@@ -251,17 +299,14 @@ class ETAInvoiceExporter {
         console.log(`Message attempt ${i + 1} failed:`, error);
         
         if (i === maxRetries - 1) {
-          // Last attempt failed
           if (error.message.includes('Could not establish connection')) {
             throw new Error('فشل في الاتصال مع الصفحة. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.');
           }
           throw error;
         }
         
-        // Wait before retry
         await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
         
-        // Try to ensure content script is loaded again
         try {
           await this.ensureContentScriptLoaded(tabId);
         } catch (ensureError) {
@@ -281,7 +326,7 @@ class ETAInvoiceExporter {
     
     const downloadAllLabel = this.elements.checkboxes.downloadAll?.parentElement.querySelector('label');
     if (downloadAllLabel) {
-      downloadAllLabel.innerHTML = `تحميل جميع الصفحات - <span id="totalCountText">${this.totalCount}</span> فاتورة (${this.totalPages} صفحة)`;
+      downloadAllLabel.innerHTML = `⚡ تحميل جميع الصفحات بسرعة عالية - <span id="totalCountText">${this.totalCount}</span> فاتورة (${this.totalPages} صفحة)`;
     }
   }
   
@@ -352,12 +397,12 @@ class ETAInvoiceExporter {
     }
     
     await this.generateFile(dataToExport, format, options);
-    this.showStatus(`تم تصدير ${dataToExport.length} فاتورة بنجاح!`, 'success');
+    this.showStatus(`✅ تم تصدير ${dataToExport.length} فاتورة بنجاح!`, 'success');
   }
   
   async exportAllPages(format, options) {
     this.showProgress();
-    this.showStatus('جاري تحميل جميع الصفحات...', 'loading');
+    this.showStatus('⚡ جاري التحميل السريع لجميع الصفحات...', 'loading');
     
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
@@ -389,7 +434,7 @@ class ETAInvoiceExporter {
     });
     
     await this.generateFile(dataToExport, format, options);
-    this.showStatus(`تم تصدير ${dataToExport.length} فاتورة من جميع الصفحات بنجاح!`, 'success');
+    this.showStatus(`🚀 تم تصدير ${dataToExport.length} فاتورة من جميع الصفحات بسرعة عالية!`, 'success');
   }
   
   showProgress() {
@@ -420,7 +465,7 @@ class ETAInvoiceExporter {
   
   async loadInvoiceDetails(invoices, tabId) {
     const detailedInvoices = [];
-    const batchSize = 2;
+    const batchSize = 5; // Increased batch size for faster processing
     
     for (let i = 0; i < invoices.length; i += batchSize) {
       const batch = invoices.slice(i, i + batchSize);
@@ -452,7 +497,7 @@ class ETAInvoiceExporter {
       detailedInvoices.push(...batchResults);
       
       if (i + batchSize < invoices.length) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 100)); // Reduced delay
       }
     }
     
@@ -476,85 +521,81 @@ class ETAInvoiceExporter {
   generateExcelFileWithCorrectLayout(data, options) {
     const wb = XLSX.utils.book_new();
     
-    // Create main sheet with exact layout from images
     this.createMainSheetWithExactLayout(wb, data, options);
     
-    // Create details sheets if requested
     if (options.downloadDetails) {
       this.createDetailsSheetsWithLinks(wb, data, options);
     }
     
-    // Add statistics sheet
     this.createStatisticsSheet(wb, data, options);
     
     const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
-    const pageInfo = options.downloadAll ? 'AllPages' : `Page${this.currentPage}`;
+    const pageInfo = options.downloadAll ? 'AllPages_Fast' : `Page${this.currentPage}`;
     const filename = `ETA_Invoices_${pageInfo}_${timestamp}.xlsx`;
     
     XLSX.writeFile(wb, filename);
   }
   
   createMainSheetWithExactLayout(wb, data, options) {
-    // Headers exactly as shown in the images (right to left)
     const headers = [
-      'تسلسل',                    // A - Serial number
-      'عرض',                     // B - View button  
-      'نوع المستند',              // C - Document type
-      'نسخة المستند',             // D - Document version
-      'الحالة',                  // E - Status
-      'تاريخ الإصدار',            // F - Issue date
-      'تاريخ التقديم',            // G - Submission date
-      'عملة الفاتورة',            // H - Invoice currency
-      'قيمة الفاتورة',            // I - Invoice value
-      'ضريبة القيمة المضافة',      // J - VAT amount
-      'الخصم تحت حساب الضريبة',    // K - Tax discount
-      'إجمالي الفاتورة',          // L - Total invoice
-      'الرقم الداخلي',            // M - Internal number
-      'الرقم الإلكتروني',         // N - Electronic number
-      'الرقم الضريبي للبائع',      // O - Seller tax number
-      'اسم البائع',              // P - Seller name
-      'عنوان البائع',            // Q - Seller address
-      'الرقم الضريبي للمشتري',     // R - Buyer tax number
-      'اسم المشتري',             // S - Buyer name
-      'عنوان المشتري',           // T - Buyer address
-      'مرجع طلب الشراء',          // U - Purchase order ref
-      'وصف طلب الشراء',          // V - Purchase order desc
-      'مرجع طلب المبيعات',        // W - Sales order ref
-      'التوقيع الإلكتروني',       // X - Electronic signature
-      'دليل الغذاء والدواء',       // Y - Food drug guide
-      'الرابط الخارجي'            // Z - External link
+      'تسلسل',                    
+      'عرض',                     
+      'نوع المستند',              
+      'نسخة المستند',             
+      'الحالة',                  
+      'تاريخ الإصدار',            
+      'تاريخ التقديم',            
+      'عملة الفاتورة',            
+      'قيمة الفاتورة',            
+      'ضريبة القيمة المضافة',      
+      'الخصم تحت حساب الضريبة',    
+      'إجمالي الفاتورة',          
+      'الرقم الداخلي',            
+      'الرقم الإلكتروني',         
+      'الرقم الضريبي للبائع',      
+      'اسم البائع',              
+      'عنوان البائع',            
+      'الرقم الضريبي للمشتري',     
+      'اسم المشتري',             
+      'عنوان المشتري',           
+      'مرجع طلب الشراء',          
+      'وصف طلب الشراء',          
+      'مرجع طلب المبيعات',        
+      'التوقيع الإلكتروني',       
+      'دليل الغذاء والدواء',       
+      'الرابط الخارجي'            
     ];
 
     const rows = [headers];
     
     data.forEach((invoice, index) => {
       const row = [
-        index + 1,                                           // A - تسلسل
-        'عرض',                                               // B - عرض
-        invoice.documentType || 'فاتورة',                    // C - نوع المستند
-        invoice.documentVersion || '1.0',                    // D - نسخة المستند
-        invoice.status || '',                                // E - الحالة
-        invoice.issueDate || '',                             // F - تاريخ الإصدار
-        invoice.submissionDate || invoice.issueDate || '',   // G - تاريخ التقديم
-        invoice.invoiceCurrency || 'EGP',                    // H - عملة الفاتورة
-        this.formatCurrency(invoice.invoiceValue || invoice.totalAmount), // I - قيمة الفاتورة
-        this.formatCurrency(invoice.vatAmount),              // J - ضريبة القيمة المضافة
-        this.formatCurrency(invoice.taxDiscount || '0'),     // K - الخصم تحت حساب الضريبة
-        this.formatCurrency(invoice.totalAmount),            // L - إجمالي الفاتورة
-        invoice.internalNumber || '',                        // M - الرقم الداخلي
-        invoice.electronicNumber || '',                      // N - الرقم الإلكتروني
-        invoice.sellerTaxNumber || '',                       // O - الرقم الضريبي للبائع
-        invoice.sellerName || '',                            // P - اسم البائع
-        invoice.sellerAddress || '',                         // Q - عنوان البائع
-        invoice.buyerTaxNumber || '',                        // R - الرقم الضريبي للمشتري
-        invoice.buyerName || '',                             // S - اسم المشتري
-        invoice.buyerAddress || '',                          // T - عنوان المشتري
-        invoice.purchaseOrderRef || '',                      // U - مرجع طلب الشراء
-        invoice.purchaseOrderDesc || '',                     // V - وصف طلب الشراء
-        invoice.salesOrderRef || '',                         // W - مرجع طلب المبيعات
-        invoice.electronicSignature || 'موقع إلكترونياً',    // X - التوقيع الإلكتروني
-        invoice.foodDrugGuide || '',                         // Y - دليل الغذاء والدواء
-        invoice.externalLink || ''                           // Z - الرابط الخارجي
+        index + 1,                                           
+        'عرض',                                               
+        invoice.documentType || 'فاتورة',                    
+        invoice.documentVersion || '1.0',                    
+        invoice.status || '',                                
+        invoice.issueDate || '',                             
+        invoice.submissionDate || invoice.issueDate || '',   
+        invoice.invoiceCurrency || 'EGP',                    
+        this.formatCurrency(invoice.invoiceValue || invoice.totalAmount), 
+        this.formatCurrency(invoice.vatAmount),              
+        this.formatCurrency(invoice.taxDiscount || '0'),     
+        this.formatCurrency(invoice.totalAmount),            
+        invoice.internalNumber || '',                        
+        invoice.electronicNumber || '',                      
+        invoice.sellerTaxNumber || '',                       
+        invoice.sellerName || '',                            
+        invoice.sellerAddress || '',                         
+        invoice.buyerTaxNumber || '',                        
+        invoice.buyerName || '',                             
+        invoice.buyerAddress || '',                          
+        invoice.purchaseOrderRef || '',                      
+        invoice.purchaseOrderDesc || '',                     
+        invoice.salesOrderRef || '',                         
+        invoice.electronicSignature || 'موقع إلكترونياً',    
+        invoice.foodDrugGuide || '',                         
+        invoice.externalLink || ''                           
       ];
       
       rows.push(row);
@@ -562,10 +603,7 @@ class ETAInvoiceExporter {
     
     const ws = XLSX.utils.aoa_to_sheet(rows);
     
-    // Add hyperlinks to the "عرض" column
     this.addInternalHyperlinks(ws, data);
-    
-    // Format the worksheet
     this.formatMainWorksheet(ws, headers, data.length);
     
     XLSX.utils.book_append_sheet(wb, ws, 'فواتير مصلحة الضرائب');
@@ -600,22 +638,20 @@ class ETAInvoiceExporter {
     data.forEach((invoice, index) => {
       const sheetName = `تفاصيل_${index + 1}`;
       
-      // Headers for invoice details (right to left as in image)
       const detailHeaders = [
-        'كود الصنف',                // A - Item code
-        'الوصف',                   // B - Description
-        'كود الوحدة',              // C - Unit code
-        'اسم الوحدة',              // D - Unit name
-        'الكمية',                 // E - Quantity
-        'السعر',                  // F - Unit price
-        'القيمة',                 // G - Total value
-        'الضريبة',                // H - Tax amount
-        'ضريبة القيمة المضافة',    // I - VAT amount
-        'الإجمالي'                // J - Total with VAT
+        'كود الصنف',                
+        'الوصف',                   
+        'كود الوحدة',              
+        'اسم الوحدة',              
+        'الكمية',                 
+        'السعر',                  
+        'القيمة',                 
+        'الضريبة',                
+        'ضريبة القيمة المضافة',    
+        'الإجمالي'                
       ];
       
       const detailRows = [
-        // Invoice header information
         ['معلومات الفاتورة', '', '', '', '', '', '', '', '', ''],
         ['الرقم الإلكتروني:', invoice.electronicNumber || '', '', '', '', '', '', '', '', ''],
         ['الرقم الداخلي:', invoice.internalNumber || '', '', '', '', '', '', '', '', ''],
@@ -626,20 +662,19 @@ class ETAInvoiceExporter {
         detailHeaders
       ];
       
-      // Add invoice line items
       if (invoice.details && invoice.details.length > 0) {
         invoice.details.forEach(item => {
           detailRows.push([
-            item.itemCode || '',                              // A - كود الصنف
-            item.description || '',                           // B - الوصف
-            item.unitCode || 'EA',                           // C - كود الوحدة
-            item.unitName || 'قطعة',                         // D - اسم الوحدة
-            item.quantity || '1',                            // E - الكمية
-            this.formatCurrency(item.unitPrice),             // F - السعر
-            this.formatCurrency(item.totalValue),            // G - القيمة
-            this.formatCurrency(item.taxAmount || '0'),      // H - الضريبة
-            this.formatCurrency(item.vatAmount),             // I - ضريبة القيمة المضافة
-            this.formatCurrency(item.totalWithVat || item.totalValue) // J - الإجمالي
+            item.itemCode || '',                              
+            item.description || '',                           
+            item.unitCode || 'EA',                           
+            item.unitName || 'قطعة',                         
+            item.quantity || '1',                            
+            this.formatCurrency(item.unitPrice),             
+            this.formatCurrency(item.totalValue),            
+            this.formatCurrency(item.taxAmount || '0'),      
+            this.formatCurrency(item.vatAmount),             
+            this.formatCurrency(item.totalWithVat || item.totalValue) 
           ]);
         });
       } else {
@@ -657,7 +692,6 @@ class ETAInvoiceExporter {
         ]);
       }
       
-      // Add totals row
       const totalValue = invoice.invoiceValue || invoice.totalAmount || '0';
       const totalVat = invoice.vatAmount || '0';
       const grandTotal = invoice.totalAmount || '0';
@@ -671,13 +705,11 @@ class ETAInvoiceExporter {
         this.formatCurrency(grandTotal)
       ]);
       
-      // Add back link
       detailRows.push(['', '', '', '', '', '', '', '', '', '']);
       detailRows.push(['العودة للقائمة الرئيسية', '', '', '', '', '', '', '', '', '']);
       
       const ws = XLSX.utils.aoa_to_sheet(detailRows);
       
-      // Add back link
       const backLinkCell = XLSX.utils.encode_cell({ r: detailRows.length - 1, c: 0 });
       if (ws[backLinkCell]) {
         ws[backLinkCell].l = { 
@@ -708,39 +740,16 @@ class ETAInvoiceExporter {
   }
   
   formatMainWorksheet(ws, headers, dataLength) {
-    // Set column widths
     const colWidths = [
-      { wch: 8 },   // A - تسلسل
-      { wch: 10 },  // B - عرض
-      { wch: 15 },  // C - نوع المستند
-      { wch: 8 },   // D - نسخة المستند
-      { wch: 15 },  // E - الحالة
-      { wch: 18 },  // F - تاريخ الإصدار
-      { wch: 18 },  // G - تاريخ التقديم
-      { wch: 12 },  // H - عملة الفاتورة
-      { wch: 15 },  // I - قيمة الفاتورة
-      { wch: 18 },  // J - ضريبة القيمة المضافة
-      { wch: 20 },  // K - الخصم تحت حساب الضريبة
-      { wch: 15 },  // L - إجمالي الفاتورة
-      { wch: 20 },  // M - الرقم الداخلي
-      { wch: 30 },  // N - الرقم الإلكتروني
-      { wch: 20 },  // O - الرقم الضريبي للبائع
-      { wch: 25 },  // P - اسم البائع
-      { wch: 20 },  // Q - عنوان البائع
-      { wch: 20 },  // R - الرقم الضريبي للمشتري
-      { wch: 25 },  // S - اسم المشتري
-      { wch: 20 },  // T - عنوان المشتري
-      { wch: 20 },  // U - مرجع طلب الشراء
-      { wch: 20 },  // V - وصف طلب الشراء
-      { wch: 20 },  // W - مرجع طلب المبيعات
-      { wch: 18 },  // X - التوقيع الإلكتروني
-      { wch: 18 },  // Y - دليل الغذاء والدواء
-      { wch: 50 }   // Z - الرابط الخارجي
+      { wch: 8 },   { wch: 10 },  { wch: 15 },  { wch: 8 },   { wch: 15 },  { wch: 18 },  
+      { wch: 18 },  { wch: 12 },  { wch: 15 },  { wch: 18 },  { wch: 20 },  { wch: 15 },  
+      { wch: 20 },  { wch: 30 },  { wch: 20 },  { wch: 25 },  { wch: 20 },  { wch: 20 },  
+      { wch: 25 },  { wch: 20 },  { wch: 20 },  { wch: 20 },  { wch: 20 },  { wch: 18 },  
+      { wch: 18 },  { wch: 50 }   
     ];
     
     ws['!cols'] = colWidths;
     
-    // Style header row
     const range = XLSX.utils.decode_range(ws['!ref']);
     for (let col = range.s.c; col <= range.e.c; col++) {
       const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col });
@@ -759,7 +768,6 @@ class ETAInvoiceExporter {
       };
     }
     
-    // Style data rows
     for (let row = 1; row <= range.e.r; row++) {
       const isEvenRow = row % 2 === 0;
       const fillColor = isEvenRow ? "F8F9FA" : "FFFFFF";
@@ -784,16 +792,8 @@ class ETAInvoiceExporter {
   
   formatDetailsWorksheet(ws, headers) {
     const colWidths = [
-      { wch: 20 }, // A - كود الصنف
-      { wch: 35 }, // B - الوصف
-      { wch: 12 }, // C - كود الوحدة
-      { wch: 15 }, // D - اسم الوحدة
-      { wch: 10 }, // E - الكمية
-      { wch: 12 }, // F - السعر
-      { wch: 12 }, // G - القيمة
-      { wch: 12 }, // H - الضريبة
-      { wch: 15 }, // I - ضريبة القيمة المضافة
-      { wch: 12 }  // J - الإجمالي
+      { wch: 20 }, { wch: 35 }, { wch: 12 }, { wch: 15 }, { wch: 10 }, 
+      { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 12 }  
     ];
     
     ws['!cols'] = colWidths;
@@ -844,7 +844,7 @@ class ETAInvoiceExporter {
     const stats = this.calculateStatistics(data);
     
     const statsData = [
-      ['إحصائيات الفواتير', ''],
+      ['إحصائيات الفواتير - التصدير السريع', ''],
       ['', ''],
       ['إجمالي عدد الفواتير', data.length],
       ['إجمالي قيمة الفواتير', this.formatCurrency(stats.totalValue) + ' EGP'],
@@ -858,8 +858,9 @@ class ETAInvoiceExporter {
       ...Object.entries(stats.typeCounts).map(([type, count]) => [type, count]),
       ['', ''],
       ['تاريخ التصدير', new Date().toLocaleString('ar-EG')],
-      ['نوع التصدير', options.downloadAll ? 'جميع الصفحات' : 'الصفحة الحالية'],
-      ['عدد الحقول المصدرة', Object.values(options).filter(Boolean).length]
+      ['نوع التصدير', options.downloadAll ? '⚡ جميع الصفحات - سريع' : 'الصفحة الحالية'],
+      ['عدد الحقول المصدرة', Object.values(options).filter(Boolean).length],
+      ['وضع الأداء', 'محسن للسرعة العالية']
     ];
     
     const ws = XLSX.utils.aoa_to_sheet(statsData);
@@ -900,12 +901,13 @@ class ETAInvoiceExporter {
     const jsonData = {
       exportDate: new Date().toISOString(),
       totalCount: data.length,
-      exportType: options.downloadAll ? 'all_pages' : 'current_page',
+      exportType: options.downloadAll ? 'all_pages_fast' : 'current_page',
       totalPages: this.totalPages,
       currentPage: this.currentPage,
       selectedFields: Object.keys(options).filter(key => options[key]),
       options: options,
       statistics: this.calculateStatistics(data),
+      performanceMode: 'optimized',
       invoices: data
     };
     
@@ -915,7 +917,7 @@ class ETAInvoiceExporter {
     const a = document.createElement('a');
     a.href = url;
     const timestamp = new Date().toISOString().split('T')[0];
-    const pageInfo = options.downloadAll ? 'AllPages' : `Page${this.currentPage}`;
+    const pageInfo = options.downloadAll ? 'AllPages_Fast' : `Page${this.currentPage}`;
     a.download = `ETA_Invoices_${pageInfo}_${timestamp}.json`;
     document.body.appendChild(a);
     a.click();
