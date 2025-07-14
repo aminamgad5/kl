@@ -22,7 +22,8 @@
       "matches": ["https://invoicing.eta.gov.eg/*"],
       "js": ["content.js"],
       "css": ["content.css"],
-      "run_at": "document_start"
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
   "web_accessible_resources": [

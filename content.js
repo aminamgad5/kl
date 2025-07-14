@@ -1,6 +1,8 @@
 // Enhanced Content script for ETA Invoice Exporter - Fast Multi-Page Loading
 class ETAContentScript {
   constructor() {
+    this.isInitialized = false;
+    this.initializationPromise = null;
     this.invoiceData = [];
     this.allPagesData = [];
     this.totalCount = 0;
@@ -13,11 +15,18 @@ class ETAContentScript {
     this.pageLoadTimeout = 10000; // Reduced from 20 seconds
     this.apiEndpoint = null;
     this.authHeaders = null;
-    this.init();
+    
+    // Initialize asynchronously
+    this.initializationPromise = this.init();
   }
   
-  init() {
+  async init() {
+    if (this.isInitialized) {
+      return;
+    }
+    
     console.log('ETA Exporter: Content script initialized');
+    
     this.detectAPIEndpoint();
     
     if (document.readyState === 'loading') {
@@ -27,6 +36,9 @@ class ETAContentScript {
     }
     
     this.setupMutationObserver();
+    
+    this.isInitialized = true;
+    console.log('ETA Exporter: Initialization complete');
   }
   
   // NEW: API Detection for Direct Calls
@@ -115,6 +127,12 @@ class ETAContentScript {
   
   scanForInvoices() {
     try {
+      // Wait for page to be fully loaded
+      if (document.readyState !== 'complete') {
+        setTimeout(() => this.scanForInvoices(), 500);
+        return;
+      }
+      
       console.log('ETA Exporter: Starting invoice scan...');
       this.invoiceData = [];
       
@@ -123,7 +141,9 @@ class ETAContentScript {
       console.log(`ETA Exporter: Found ${rows.length} visible invoice rows on page ${this.currentPage}`);
       
       if (rows.length === 0) {
+        // Try alternative selectors
         const alternativeRows = this.getAlternativeInvoiceRows();
+        console.log(`ETA Exporter: Found ${alternativeRows.length} alternative rows`);
         alternativeRows.forEach((row, index) => {
           const invoiceData = this.extractDataFromRow(row, index + 1);
           if (this.isValidInvoiceData(invoiceData)) {
@@ -1067,9 +1087,28 @@ const etaContentScript = new ETAContentScript();
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('ETA Exporter: Received message:', request.action);
   
+  // Ensure content script is initialized before processing messages
+  if (!etaContentScript.isInitialized && request.action !== 'ping') {
+    etaContentScript.initializationPromise.then(() => {
+      handleMessage(request, sender, sendResponse);
+    }).catch(error => {
+      console.error('Initialization failed:', error);
+      sendResponse({ success: false, error: 'Content script initialization failed' });
+    });
+    return true; // Keep message channel open
+  }
+  
+  return handleMessage(request, sender, sendResponse);
+});
+
+function handleMessage(request, sender, sendResponse) {
   switch (request.action) {
     case 'ping':
-      sendResponse({ success: true, message: 'Content script is ready' });
+      sendResponse({ 
+        success: true, 
+        message: 'Content script is ready',
+        initialized: etaContentScript.isInitialized 
+      });
       break;
       
     case 'getInvoiceData':

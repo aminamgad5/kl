@@ -123,10 +123,19 @@ class ETABackground {
 
     handleTabUpdate(tab) {
         if (tab.url && tab.url.includes('invoicing.eta.gov.eg')) {
+            // Clear any existing badge first
             chrome.action.setBadgeText({
                 tabId: tab.id,
-                text: '⚡'
+                text: ''
             });
+            
+            // Set new badge after a short delay
+            setTimeout(() => {
+                chrome.action.setBadgeText({
+                    tabId: tab.id,
+                    text: '⚡'
+                });
+            }, 500);
             
             chrome.action.setBadgeBackgroundColor({
                 tabId: tab.id,

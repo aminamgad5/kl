@@ -236,33 +236,62 @@ class ETAInvoiceExporter {
         return;
       }
       
+      // Show loading status
+      this.showStatus('جاري تحميل المكونات المطلوبة...', 'loading');
+      
       await this.ensureContentScriptLoaded(tab.id);
       await this.loadInvoiceData();
     } catch (error) {
-      this.showStatus('خطأ في فحص الصفحة الحالية', 'error');
+      this.showStatus('خطأ في فحص الصفحة الحالية: ' + error.message, 'error');
       console.error('Error:', error);
+      this.disableButtons();
     }
   }
   
   async ensureContentScriptLoaded(tabId) {
     try {
+      // First try to ping the existing content script
       await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+      console.log('Content script already loaded and responsive');
     } catch (error) {
       console.log('Content script not found, injecting...');
       
       try {
+        // Inject CSS first
+        await chrome.scripting.insertCSS({
+          target: { tabId: tabId },
+          files: ['content.css']
+        });
+        
+        // Then inject the content script
         await chrome.scripting.executeScript({
           target: { tabId: tabId },
           files: ['content.js']
         });
         
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+        // Wait for content script to initialize
+        await this.waitForContentScript(tabId);
         console.log('Content script successfully injected and ready');
       } catch (injectError) {
-        throw new Error('فشل في تحميل المكونات المطلوبة. يرجى إعادة تحميل الصفحة.');
+        console.error('Injection failed:', injectError);
+        throw new Error('فشل في تحميل المكونات المطلوبة. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.');
       }
     }
+  }
+  
+  async waitForContentScript(tabId, maxAttempts = 10) {
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const response = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+        if (response && response.success) {
+          return true;
+        }
+      } catch (error) {
+        console.log(`Ping attempt ${i + 1} failed, retrying...`);
+      }
+    }
+    throw new Error('Content script failed to respond after injection');
   }
   
   async loadInvoiceData() {
@@ -293,25 +322,30 @@ class ETAInvoiceExporter {
   async sendMessageWithRetry(tabId, message, maxRetries = 3) {
     for (let i = 0; i < maxRetries; i++) {
       try {
+        // Ensure content script is loaded before each attempt
+        if (i > 0) {
+          await this.ensureContentScriptLoaded(tabId);
+        }
+        
         const response = await chrome.tabs.sendMessage(tabId, message);
-        return response;
+        
+        if (response) {
+          return response;
+        } else {
+          throw new Error('Empty response from content script');
+        }
       } catch (error) {
         console.log(`Message attempt ${i + 1} failed:`, error);
         
         if (i === maxRetries - 1) {
           if (error.message.includes('Could not establish connection')) {
-            throw new Error('فشل في الاتصال مع الصفحة. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.');
+            throw new Error('فشل في الاتصال مع الصفحة. يرجى إعادة تحميل الصفحة وإعادة فتح الإضافة.');
           }
           throw error;
         }
         
-        await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
-        
-        try {
-          await this.ensureContentScriptLoaded(tabId);
-        } catch (ensureError) {
-          console.warn('Failed to ensure content script:', ensureError);
-        }
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
       }
     }
   }
